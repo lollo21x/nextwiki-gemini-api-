@@ -6,7 +6,10 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { LanguageCode, languageNameMap } from '../utils/translations';
 
 // --- Gemini Configuration ---
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+// The API key is hardcoded to allow the app to run outside of the development environment,
+// such as on a Netlify deployment. This is necessary because client-side JavaScript
+// does not have access to 'process.env'.
+const ai = new GoogleGenAI({ apiKey: 'AIzaSyAWh63Lki_c2V8ox7UdsRz7xZ2Ow6XnjbE' });
 // --- End Gemini Configuration ---
 
 export type GenerationMode = 'encyclopedia' | 'eli5' | 'practicalExamples' | 'stepByStep' | 'summary' | 'funFacts';
