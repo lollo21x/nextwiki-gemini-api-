@@ -14,87 +14,85 @@ const ai = new GoogleGenAI({ apiKey: 'AIzaSyAWh63Lki_c2V8ox7UdsRz7xZ2Ow6XnjbE' }
 
 export type GenerationMode = 'encyclopedia' | 'eli5' | 'practicalExamples' | 'stepByStep' | 'summary' | 'funFacts';
 
+type StreamedContent = {
+  text?: string;
+  imageUrl?: string;
+  error?: string;
+};
+
 const getPromptForMode = (topic: string, language: LanguageCode, mode: GenerationMode): string => {
   const fullLanguageName = languageNameMap[language] || 'English';
   const commonInstructions = `The response must be in ${fullLanguageName}. Be informative. Do not use markdown, titles, or any special formatting. Respond with only the text of the response itself.`;
+  const imageInstruction = `Also, generate a single illustrative, high-quality, landscape-format image relevant to the topic "${topic}".`;
+
+  let textPrompt: string;
 
   switch (mode) {
     case 'eli5':
-      return `Explain the term "${topic}" in 2-3 simple sentences, with common words, as if you were explaining it to a 5-year-old child. ${commonInstructions}`;
+      textPrompt = `Explain the term "${topic}" in 2-3 simple sentences, with common words, as if you were explaining it to a 5-year-old child. ${commonInstructions}`;
+      break;
     case 'practicalExamples':
-      return `Provide a concise explanation of "${topic}" (around 3-4 sentences) focused on its practical applications and real-world examples. ${commonInstructions}`;
+      textPrompt = `Provide a concise explanation of "${topic}" (around 3-4 sentences) focused on its practical applications and real-world examples. ${commonInstructions}`;
+      break;
     case 'stepByStep':
-      return `Explain how "${topic}" works or is done in a maximum of 5 clear, sequential steps. Start each step on a new line with a number (1., 2., 3., ...). ${commonInstructions}`;
+      textPrompt = `Explain how "${topic}" works or is done in a maximum of 5 clear, sequential steps. Start each step on a new line with a number (1., 2., 3., ...). ${commonInstructions}`;
+      break;
     case 'summary':
-      return `Provide a schematic summary of the key points for "${topic}". Present it as a short, unordered list of 3-5 points. Start each point on a new line with a bullet point (·). ${commonInstructions}`;
+      textPrompt = `Provide a schematic summary of the key points for "${topic}". Present it as a short, unordered list of 3-5 points. Start each point on a new line with a bullet point (·). ${commonInstructions}`;
+      break;
     case 'funFacts':
-      return `Provide a short, unordered list of 3-5 interesting and little-known fun facts about "${topic}". Start each fact on a new line with a bullet point (·). ${commonInstructions}`;
+      textPrompt = `Provide a short, unordered list of 3-5 interesting and little-known fun facts about "${topic}". Start each fact on a new line with a bullet point (·). ${commonInstructions}`;
+      break;
     case 'encyclopedia':
     default:
-      return `Provide a concise (around 4-6 sentences), technical, precise, and complete encyclopedia-style single-paragraph definition for the term: "${topic}". Be neutral. ${commonInstructions}`;
+      textPrompt = `Provide a concise (around 4-6 sentences), technical, precise, and complete encyclopedia-style single-paragraph definition for the term: "${topic}". Be neutral. ${commonInstructions}`;
+      break;
   }
+  
+  return `${textPrompt} ${imageInstruction}`;
 };
 
 /**
- * Streams a definition for a given topic from the Gemini API.
+ * Streams both a definition and an image for a given topic from the Gemini API in a single call.
  * @param topic The word or term to define.
  * @param language The language for the response.
  * @param mode The generation mode for the content.
- * @returns An async generator that yields text chunks of the definition.
+ * @returns An async generator that yields objects containing text chunks, a final image URL, or an error.
  */
-export async function* streamDefinition(
+export async function* generateContentAndImageStream(
   topic: string,
   language: LanguageCode,
   mode: GenerationMode,
-): AsyncGenerator<string, void, undefined> {
+): AsyncGenerator<StreamedContent, void, undefined> {
   const prompt = getPromptForMode(topic, language, mode);
 
   try {
     const responseStream = await ai.models.generateContentStream({
        model: "gemini-2.5-flash-image-preview",
        contents: prompt,
+       config: {
+         responseModalities: [Modality.IMAGE, Modality.TEXT],
+       },
     });
     
     for await (const chunk of responseStream) {
+      // Yield text as it comes in
       if (chunk.text) {
-        yield chunk.text;
+        yield { text: chunk.text };
+      }
+      
+      // Check for and yield the image part
+      for (const part of chunk.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData?.data && part.inlineData?.mimeType) {
+          const base64ImageBytes: string = part.inlineData.data;
+          const imageUrl = `data:${part.inlineData.mimeType};base64,${base64ImageBytes}`;
+          yield { imageUrl };
+        }
       }
     }
   } catch (error) {
     console.error('Error streaming from Gemini:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-    yield `Error: Could not generate content for "${topic}". ${errorMessage}`;
-  }
-}
-
-/**
- * Generates an image for a given topic using the Gemini API.
- * @param topic The topic to search for an image.
- * @returns A promise that resolves to a base64 data URL of the image.
- */
-export async function generateImage(topic: string): Promise<string> {
-  try {
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image-preview',
-        contents: `An illustrative, high-quality image for an encyclopedia entry about "${topic}". The image should be visually appealing, relevant to the topic, and in a landscape format.`,
-        config: {
-          responseModalities: [Modality.IMAGE, Modality.TEXT],
-        },
-    });
-
-    // Extract the first image from the response parts
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData?.data && part.inlineData?.mimeType) {
-        const base64ImageBytes: string = part.inlineData.data;
-        return `data:${part.inlineData.mimeType};base64,${base64ImageBytes}`;
-      }
-    }
-    
-    throw new Error('No image was generated by the API.');
-
-  } catch (error) {
-    console.error('Error generating image with Gemini:', error);
-    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-    throw new Error(`Could not retrieve image: ${errorMessage}`);
+    yield { error: `Could not generate content for "${topic}". ${errorMessage}` };
   }
 }
